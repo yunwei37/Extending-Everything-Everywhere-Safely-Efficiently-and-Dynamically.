@@ -1,0 +1,34 @@
+\section{Related Work}\label{sec:related_work}
+% go back
+\sys is the first system to support comprehensive, safe, dynamic, and efficient extensions. 
+
+Many systems support software customization through an extension primitive allowing developers to observe or modify a system's default behavior.  Nearly all existing work supports extending either an operating system kernel (\eg Nooks~\cite{Swift03}, VINO~\cite{Seltzer96}, SPIN~\cite{Bershad95}) or an application (\eg PIN~\cite{Luk05}, Valgrind~\cite{Nethercote07}, DynamoRIO~\cite{Bruening12}).  In contrast to these systems, \sys supports comprehensive extensions---\ie ones that extend both userspace applications and a kernel.
+
+eBPF is the de facto extension framework in linux and has recently been adopted in Windows~\cite {eBPFWindows}.  eBPF is \emph{almost} comprehensive, except that eBPF userspace extensions cannot modify application behavior.  Moreover, eBPF's appraoch to safety executes userspace extensions in the kernel which comes with high overhead.  \sys{} resolves the comprehensiveness and efficiency issues of eBPF by executing userspace extensions directly in the execution context of the target application without requiring kernel involvement.
+
+Ensuring system safety in the presence of software extensions requires isolating extension logic from the original logic of the program.  Many systems isolate untrusted extension code in a sandbox through the use of software fault isolation (SFI)~\cite{Wahbe93}.  For example,  dynamic instrumentation frameworks~\cite{Luk05, Nethercote07, Bruening12}, and lightweight virtual machines (\eg WebAssembly~\cite{webassembly}, NaCL~\cite{Yee09}, RLBox~\cite{Narayan20}), execute programs in a virtualized environment that monitors all memory and control-flow operations to isolate failures.  These approaches impose a high runtime overhead that precludes efficiency.
+
+\sys{}'s use of intra-process memory protections is adopted from the approaches taken by Donky~\cite{schrammel2020donky}, ERIM~\cite{Vahldiek19} and libmpk~\cite{Park19}.  \sys{}'s key differences between these systems is the target domain---\sys{} applies these ideas to extend an existing application without requiring source-code changes, whereas prior work uses intra-process memory protection to provide lightweight protection domains that a rewritten application can use. There are many lightweight isolation abstractions that have been proposed (\eg Wedge~\cite{Bittau08}, Lightweight contexts~\cite{Litton16}, Orbit~\cite{Jing22}, \etc); \sys{} differs from these works in its target domain.
+
+ubpf~\cite{ubpf} and rbpf~\cite{rbpf} implement virtual machines for executing eBPF bytecode in userspace.  These systems have higher runtime overhead compared to \sys's runtime that uses LLVM's ORC JIT\cite{Lattner04,lu2022bring} (see \cref{sec:design}).  Additionally, ubpf and rbpf are incomplete in that they do not support as many eBPF features as \sys and do not support eBPF Maps.
+
+%\yusheng{
+%The ubpf uses handwritten single pass jit, without doing much optimization. The rbpf is using cranelift JIT, and \sys is using LLVM jit. The \sys jit is faster thanks to the optimization from LLVM. We lift the bpf bytecode to llvm bytecode, and config llvm passes to optimize it.(Try to maximize the optimization level). The performance evaluation can be provided.
+
+%Also, they doesn't support as many eBPF features as \sys. For example, they doesn't support atomic eBPF instructions.We have a conformance test for it, many we can put the compare in evaluation?
+
+%This is for the eBPF virtual machine, but I think the most difference between the \sys and ubpf/rbpf is that they doesn't support eBPF maps in share memory or in kernel, and they cannot attach to userspace functions or syscalls, also they cannot dynamically inject in to a running process. They are just virtual machines.} \arq{thanks!}
+
+\begin{comment}
+
+\subsection{Dynamic Binary Instrumentation}
+
+Dynamic Binary Instrumentation (DBI) facilitates real-time analysis of binary applications by injecting instrumentation code during runtime. This mechanism permits the embedding of specific analysis code into a program as it executes, tailored to user specifications, without disrupting the dynamic execution flow of the program. Renowned platforms that provide dynamic binary analysis capabilities include Pin\cite{1550984}, DynamoRIO\cite{dynamorio}, and Frida\cite{fridagum}. The defining attributes of DBI encompass its capability to work directly on binary code, obviating the need for source code, and its dynamic modus operandi which allows on-the-fly modifications to the program, thus negating the necessity for recompilation or program restarts. Nonetheless, DBI comes with certain caveats: it lacks built-in security checks or verification measures which may pose potential security risks. Moreover, in the absence of a high-performance virtual machine (VM) and an encapsulated sandbox environment, the efficiency of DBI could be compromised, and there's a potential to disrupt the execution states of the target process. Furthermore, existing DBI tools fall short in providing a high-performance control panel or data aggregation mechanisms akin to the capabilities offered by eBPF maps.
+
+\subsection{WebAssembly}
+
+WebAssembly (Wasm)\cite{webassembly} is a binary instruction format created as a portable compilation target for high-level languages such as C, C++, and Rust. It endeavors to achieve execution at native speed by leveraging common hardware capabilities. WebAssembly's design ensures portability across all modern platforms, both on desktop and mobile. It also operates within a sandboxed execution environment to maintain secure execution. With its binary format, WebAssembly enables faster parsing, compiling, and execution compared to traditional text-based web technologies. The structure and principles behind WebAssembly make it a suitable platform for various use cases beyond the web, including blockchain, serverless computing, and portable CLI tools, among others.
+
+Both Dynamic Binary Instrumentation and WebAssembly illustrate unique approaches to runtime code analysis and execution. While DBI offers detailed insights into binary code behavior during runtime, WebAssembly provides a secure and portable compilation target. The exploration of these technologies, alongside the development of \textit{bpftime}, contributes to the broader effort of advancing runtime code analysis and execution frameworks.
+
+\end{comment}

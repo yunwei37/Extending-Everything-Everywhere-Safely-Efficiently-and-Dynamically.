@@ -1,0 +1,23 @@
+\section{\sys Implementation}\label{sec:implementation}
+We built a prototype of \sys{} in ~20,000 lines of C/C++ and ~1000 lines of python code.  One notable feature of the prototype is that \sys's kernel components are implemented entirely using the existing eBPF ecosystem, so the prototype \emph{does not} require any kernel modifications.  
+
+The prototype consists of three main components: the \sys{} Loader (\cref{sec:design:loader}); the \sys{} User Runtime (\cref{sec:design:UVM}); and \sys{} Maps (\cref{sec:design:maps}).  Outside these components, the prototype includes ~3,000 lines of code for miscellaneous scripts (disassembly, examples, etc.).  We outline the core components of the prototype below.
+
+\paragraph{\sys{} Loader}
+The \sys{} Loader prototype consists of ~5,000 lines of code.  Most of this code (~3,000 lines) mocks system calls, which is required to load extensions, attach to userspace events, and manage \sys{} maps.  The prototype loader has two implementations: one includes a kernel component, implemented in eBPF, while the other is a userspace shared library that uses \texttt{LD\_PRELOAD} to mock system calls in libc.  The \sys{} loader prototype supports two eBPF bytecode verifiers for userspace extensions.  The system can use the in-kernel verifier, which offers support of all eBPF bytecode instructions but cannot verify extensions that use \sys{}'s custom helper functions, or PREVAIL, which supports all of \sys's custom helper functions but does not support all eBPF bytecode instructions.  Lastly, ~2000 lines of code in the loader are used to interact with \sys{} maps.
+
+
+
+% One key challenge is producing the BPF Type Format (BTF) necessary for the verifier to ensure safety.  The Linux kernel maintainers produce the kernel's BTF alongside each release.  However, to verify an extension over an arbitrary userspace program, \sys must first produce the BTF for that program.  \sys produces BTF by first extracting debug information from the application, and then converting the debug information into BTF format.  If a function does not include debug information, then the verifier will restrict any eBPF functions from accessing the application's memory.  It also supports relocation in libbpf, allowing it to support the Compile Once---Run Everywhere (CO-RE) eBPF workflow.
+
+%\yusheng{Maybe we can also mentioned compile once run everywhere here? It's a important feature of eBPF and we support it with userspace BTF}
+% \yusheng{The Compile Once---Run Everywhere are supported in libbpf, which is part of the loading process and don't related to runtime. It's a different thing than uprobe attach to which functions, it's about whether the eBPF program works correctly even if the parameters/data structs changes}
+
+\paragraph{\sys{} User Runtime}
+
+The prototype user runtime consists of ~9,000 lines of code.  Roughly 3,000 lines of code are implement attaching logic, which uses Frida~\cite{fridagum} and libcapstone~\cite{libcapstone}.  \sys{} implements a new bytecode execution engine (~6,000 lines), since existing userspace eBPF engines (\eg uBPF~\cite{ubpf} and rBPF~\cite{rbpf}) impose high overhead and provide limited eBPF feature support.  The prototype execution engine uses LLVM's ORC Just-In-Time (JIT) Compiler~\cite{Lattner04, lu2022bring}.  At load time, the prototype compiles the eBPF bytecode into LLVM (IR); its execution engine converts the IR into native code during execution.  The prototype also supports an AOT compiler for resource limited devices.  The bytecode execution engine also includes the implementations of \sys{}'s helper functions and uFuncs interface.
+
+\paragraph{\sys Maps}
+
+The \sys{} Maps prototype (~4,000 lines) includes a rich set of map types and data structures, including hash maps, array maps, lpm tries, per-cpu hash and array maps, ring buffers and perf events arrays.  \sys{} allows eBPF applications and both runtimes (\ie the kernel and \sys{} user runtime) to use any of these data structures.  The \sys{} maps ensure efficiency by eliding system calls and use lock-free synchronization.  The prototype uses the eBPF file system~\cite{bpffs} to expose maps to the kernel and userspace.   This design ensures that accessing a \sys map does not require superuser privileges.
+

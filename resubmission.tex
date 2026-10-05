@@ -1,0 +1,34 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{color}
+\usepackage{xspace}
+\usepackage{cleveref}
+\usepackage{graphicx}
+\usepackage{subfigure}
+\usepackage{makecell}
+\usepackage{url}
+\usepackage{epsfig}
+\usepackage{savetrees}
+%\usepackage{ulem}
+
+\title{UbiBPF: Extending Everything, Everywhere, Safely, Efficiently, and Dynamically. All at Once.\\
+Significant Changes}
+
+\author{Paper \#371}
+\date{}
+\begin{document}
+\maketitle
+
+We submitted this paper to OSDI 2024. The rejected manuscript is included in this document.  The updated manuscript includes the following changes:
+
+\begin{itemize}
+    \item A revised motivation elaborating on the merits of extending software without modifying source code.
+    \item A distillation of the key design constraints for software extensions, based upon motivating use-cases.
+    \item A clarification of the key differences between UbiBPF and eBPF. 
+    \item A clarification of UbiBPF's key design components.
+    \item A clarification of which design constraints are used by each of the UbiBPF use-cases.
+    \item Clarified UbiBPF's novelty compared to existing isolation techniques, especially intra-process memory protection tools upon which the system builds.
+    \item A number of writing clarifications, typo fixes, and other changes to the text.
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,6 @@
+\begin{abstract}
+Software system extensions are useful for system administrators to customize software for the needs of a deployed system and also for adding monitoring and observability logic to better understand a system’s behavior across the entire software stack.  We find that modern use cases demand four characteristics from an extension framework: (1) comprehensiveness, (2) dynamism, (3) safety, and (4) efficiency.  Recently, a thriving ecosystem has grown around the eBPF kernel extension framework, which promises near perfect comprehensiveness, dynamism, and safety.  However, while eBPF succeeds in the kernel, it has fails to provide an ideal extension solution due to its lack of both efficiency and expressive power for userspace extensions. This paper presents \sys{}, a new framework that extends the eBPF framework that addresses these challenges.  \sys{} maintains comparability with the current eBPF ecosystem and provides an efficient, yet safe, solution for userspace extensions through a mixture of dynamic binary instrumentation, eBPF bytecode verification, and hardware-based isolation.  We demonstrate the breadth of \sys{} on \numcases{} use-cases that improve security, monitor performance, improve performance, and explore configuration tradeoffs.
+\end{abstract}
+
+
+

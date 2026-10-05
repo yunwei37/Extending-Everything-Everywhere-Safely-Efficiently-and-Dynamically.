@@ -1,0 +1,393 @@
+\section{Motivation and Goals}\label{sec:motivation}
+
+System extensions allow a user to enhance or augment software without modifying its source code.  Users turn to extensions to either \emph{customize} software for a particular workload and hardware configuration or to \emph{observe} software behavior to understand and diagnose issues.   Extension users are technical; they are comfortable writing code to modify a system's behavior.  However, extension users are \emph{not} the original developers of the extended system.  Consequently, extension users are not comfortable directly modifying their application's source code for fear of breaking it.  % They may third-parties, who release software patches for customization and observation.  But, the administrator is dubious of the correctness of third-party patches that have not been accepted into the mainline system.  
+
+In the rest of this section, we discusses two use-cases that illustrate how system extensions solve the challenges faced by system administrators (\cref{sec:motivation:examples}).  We then derive four design constraints that an extension framework must satisfy for these use-cases (\cref{sec:motivation:constraints}).  Finally, we identify the limitations of existing extension frameworks (\cref{sec:motivation:limitations}).
+
+\subsection{Extension Use-Cases}\label{sec:motivation:examples}
+
+This section elaborates on two use-cases, one for observability and the other for customization.
+
+\paragraph{Observability with DeepFlow}
+
+Consider a system administrator who manages a microservice application.  The microservice uses logic across numerous software layers (application code, language runtime, and the operating system).  To understand system performance, the administrator needs to track application behavior across software layers. DeepFlow~\cite{shen2023network} is an extension-based approach to microservice monitoring that provides monitoring across software layers.  DeepFlow extends the operating system to track its networking logic and capture low-level metrics, such as TCP re-transmissions, that effect system performance.  DeepFlow also extends userspace applications and libraries to capture data not available in the kernel, such as coroutine IDs and message payloads before TLS encryption.  Finally, DeepFlow includes a userspace program that combines the monitoring output to create a single trace that describes system actions across the kernel and userspace components.
+
+\paragraph{Customizability with Durability Tuning}
+
+Consider a system administrator who manages a Redis server, a key-value store that offers durability through a write-ahead log (called an Append-Only File (AOF) in redis).  By default, Redis offers three durability configurations that tradeoff durability and performance overhead: no AOF, which does not provide durability; everysec, which ensures that writes are durable every second; and alwayson, which ensures that every write is immediately durable.  The durability gap between alwayson and everysec is large: everysec is susceptible to losing the data of tens of thousands of updates due to an untimely crash.  Unfortunately, the gap in performance is also large, with alwayson lowering throughput by a factor of 6 compared to everysec. 
+
+The administrator aims to tune redis' durability to find configurations that provide better persistency than everysec without the inefficiency of alwayson.  Like prior work on testing~\cite{Veeraraghavan16, Veeraraghavan18}, debugging~\cite{Kasikci13, Kasikci15}, and profiling~\cite{Pancheko19}, the administrator tunes a live production system to ensure that the results are indicative of production.  First, the administrator investigates a batched I/O design using Linux's \texttt{io\_uring}.  The extension batches $b$ I/O operations (calls to \texttt{write} and \texttt{fsync}) before waiting on them to complete, which ensures that the system loses at most $b$ updates in an untimely crash.  However, the performance of highly durable configurations (\ie small values of $b$) remains poor.  So, the administrator develops another extension called \emph{delayed-fsync}.  They extend the behavior of \texttt{fdatasync} so that it waits for the \emph{previous} call to \texttt{fdatasync}, which ensures that the system loses at most 2 updates.   The administrator also implements a fast-path optimization that extends the kernel to expose a shared variable to userspace that tracks the number of completed \texttt{fdatasync} operations on each of a process' open files.  The \texttt{fdatasync} extension reads from the shared variable and only execute system calls in the event that the previous \texttt{fdatasync} has not completed.  With these optimizations, delayed-fsync achieves similar performance to everysec, but achieves significantly better durability. 
+
+\subsection{Software Extension Design Constraints} \label{sec:motivation:constraints}
+
+We extract four design constraints from the extension use-cases: comprehensiveness, dynamism, safety, and efficiency.
+
+\paragraph{Comprehensive} 
+An extension system is comprehensive if it allows a user to write extensions that span all layers of the system software stack, from the operating system, to libraries, to applications themselves.  Comprehensiveness is critical for many extension use-cases.  For example, DeepFlow uses comprehensiveness so that it can correlate observations across software layers to understand high-level system behavior.  Durability Turning uses comprehensiveness to implement the fast-path optimization for delayed-fsync.  Moreover, comprehensiveness allows an extension writer to tradeoff extension reusablility and richness.  Namely, extending lower levels of the system stack ensures that the extension is reusable across applications, while extending higher levels of the system stack exposes application-specific semantics that enable deeper observation and customization.
+
+\paragraph{Dynamic}
+An extension system is dynamic if it allows a user to inject extension logic into a program without restarting it.  Dynamism is critical for many extension use-cases.  For example, DeepFlow uses dynamism so the user can add additional monitoring on demand to better understand performance bugs or security incidents \emph{as they occur}.  Durability Tuning uses dynamism so the user can evaluate their extensions on production traffic and hardware.
+
+\paragraph{Safe}
+An extension system is safe if it provides two properties:  First, a safe extension system ensures that a buggy extension cannot crash a program.  Extensions are not written by the original system developers, so an extension framework should ``trust-but-verify'', trust that the extension is non-malicious but verify that it does not degrade reliability.  Both DeepFlow and Durability Tuning benefit from a safe extension framework, especially since their users use dynamism to extend live systems.  Second, a safe extension system ensures that a buggy or malicious application cannot break or subvert extensions.  Security monitoring use-cases rely on the second safety property.
+
+\paragraph{Efficient}
+An extension system is efficient if it introduces little overhead compared to the fundamental cost of the extension logic.  Efficiency is extremely important for extension users.  For example, DeepFlow is designed to always trace the behavior of microservice applications, which would not be possible if the underlying extension framework were inefficient.  Durability Tuning relies on efficiency otherwise the overhead of the extension framework could outweigh the advantage gained from the customization.
+
+% logic that i the extension  as this can impact the performance of the main program and degrade the user experience. For example, a monitoring extension that consumes excessive CPU cycles or memory can slow down the main program, leading to increased latency and reduced throughput. An extension to the web server that adds new features should also not significantly impact the server’s response time. \textbf{Efficiency} thus assesses the performance trade-offs of implementing extensions, where higher efficiency means lower overhead and minimal impact on the system's overall performance.
+
+% \textbf{Flexibility(5)} is also one of the requirements for an extension system's ability to support a broad range of applications and adapt to varying requirements. It entails the methodology's capacity to accommodate changes in application behavior, system architecture, or user needs without extensive modifications. % reuse
+% For example, an observability tool targets libc functions has more flexibility than targets a specific alloc function in redis.
+% ~\arq{The issue with this example is that it refers to the extensions rather than the extension system.  Is the flexibility described here a property of the extension system? Or, a property of the extension itself?} \textbf{Flexibility} gauges the ease with which an extension system can extend to meet diverse needs from different applications, with higher flexibility indicating a broader applicability and ease of adaptation.
+
+% multi-layer support, the extension developer can go anywhere you want. The higher level (like in userspace instead of kernel, the more sematic may get). The multi-layer view in the runtime help Navigate sematic gap between different layer of the system.
+% The higher, more sematic
+% Navigate sematic gap
+% "Multi-layer view"
+
+\subsection{The Limitations of State-of-the-Art} \label{sec:motivation:limitations}
+
+\begin{table}[t]
+\centering
+\footnotesize
+\begin{tabular}{lllll}
+\toprule
+Technique          & Comprehensive & Dynamic  & Safe  & Efficient \\ \midrule
+Code Modification    & Yes           & No       & No    & Yes       \\
+Dynamic Loading      & No            & No       & No    & Yes       \\
+DBI                  & No            & Yes      & No    & Yes       \\
+eBPF (kernel)   & No            & Yes      & Yes   & Yes       \\
+eBPF (userspace)     & Mostly        & Yes      & Yes   & No        \\ \bottomrule
+\end{tabular}
+\caption{Comparison of existing extension techniques.\label{tab:methodology_comparison}}
+%\vspace{-.4in}
+\end{table}
+
+\Cref{tab:methodology_comparison} outlines the limitations of existing extension techniques based on our design constraints.
+
+\paragraph{Code Modification} Code modification refers to changing an application's source code.  Code modification can be comprehensive, provided the developer modifies the source code of the kernel, libraries, and applications.  However, code modification is not dynamic, since the user cannot modify the behavior of a running program, nor is it safe, since it does not isolate the extension and the extended software (application, kernel, or library).  Finally, code modification is efficient, since the extensions execute natively.
+
+\paragraph{Dynamic Loading}  Dynamic loading extension techniques, such as \texttt{LD\_PRELOAD} and \texttt{Dyn Lib}, allow a user to change the behavior of a dynamically linked library at runtime.  These tools are not comprehensive, since they only allow extensions to application logic that is dynamically loaded and do not allow kernel extensions.  Some dynamic loading tools (e.g., \texttt{Dyn Lib}) are dynamic.  However, dynamic loading extension techniques are not safe, since they do not isolate the extension from the original application.  Finally, dynamic loading is efficient, since it executes extension logic natively.
+
+\paragraph{Dynamic Binary Instrumentation} Dynamic Binary Instrumentation (DBI) instruments a binary to observe or customize its behavior.  DBI is not comprehensive, since it cannot extend the kernel.  Some DBI tools are dynamic.  However, DBI tools are not safe, since they do not prevent extensions from crashing the extended application.  Finally, DBI tools are efficient, as they impose 10-20\% overhead~\cite{Bruening12}. 
+
+\paragraph{Extended Berkeley Packet Filters} Extended Berkeley Packet Filters (eBPF) allow a user to create extensions by writing functions that execute in an event-based manner each time the extended system reaches ``hook points''.  Users typically only extend the kernel with eBPF (eBPF (kernel)) by extending kernel functions, the return of kernel functions , and system calls.  eBPF includes a verifier that ensures that the injected extensions do not harm the kernel.  eBPF is not comprehensive when only extending the kernel. But, it is dynamic.  eBPF is also safe since the verifier ensures that an extension cannot harm the kernel and the extension's kernel execution ensures that a subverted application cannot harm the extension.  Finally, eBPF (kernel) is efficient.
+
+Recently, eBPF added support for userspace extensions (eBPF (userspace)) by adding hook points to userspace functions and their returns.  With this support, eBPF is almost comprehensive: it can observe both kernel and userspace state, but cannot modify userspace application behavior~\footnote{\texttt{bpf\_probe\_write\_user} can write to userspace memory, but is unsafe (unverifeid) and cannot change control flow.}.  eBPF (userspace) supports retains dynamism and safety.  However, eBPF userspace extensions are not efficient, since they execute in the kernel, which requires multiple context switches for each invocation.  These extra context switches cause large overhead; \eg DeepFlow degrades microservice throughput by as much as 50\% (\cref{sec:evaluation}).
+
+\smallskip
+
+\noindent\fbox{
+\begin{minipage}{.95\columnwidth}
+\textbf{\textit{Summary.}} No existing existing extension techniques meets the needs of extension use-cases because they fail to provide at least one of comprehensiveness, dynamism, safety, or efficiency.  eBPF with userspace support comes closest to addressing these needs.
+\end{minipage}}
+
+
+% \yusheng{While each methodology for extending software systems presents unique advantages, none fully meet the comprehensive requirements for safe, efficient, and dynamic full-system extensions. eBPF runtimes come closest to addressing these needs by offering broad system view and high dynamism, yet they fall short on performance, especially for user-space applications.}
+% \subsection{Discussion on Extension Systems for Specific Use Cases}
+
+% This section examines specific use cases to illustrate the practical implications of key concerns in full-system extension systems. Each use case highlights the traditional methodologies employed, the primary concerns they address, and the gaps in these methodologies.
+
+% \subsubsection{Redis Example for Batch IO}
+
+% \paragraph{Original Methodologies}
+% \begin{itemize}
+%     \item Direct Code Modification and LD\_PRELOAD/Dynamic Libraries are typically used to directly modify the Redis process, enabling program behavior adjustments or configuration changes.
+% \end{itemize}
+
+% \paragraph{Key Concerns}
+% \begin{itemize}
+%     \item Safety (1), Efficiency (4) are prioritized to optimize IO efficiency without compromising stability or security. \arq{Why is flexibility a key concern here?}
+% \end{itemize}
+
+% \paragraph{Missing Key Concerns}
+% \begin{itemize}
+%     \item Both methodologies lack in Safety (1) and Flexibility (5). Direct modifications introduce risks of bugs or vulnerabilities, while LD\_PRELOAD poses safety risks due to insufficient isolation.
+% \end{itemize}
+
+% \subsubsection{Redis Example for Delayed-fsync}
+
+% \paragraph{Original Methodologies}
+% \begin{itemize}
+%     \item Direct Code Modification, potentially alongside kernel and userspace components, optimizes disk IO by deferring fsync operations under specific conditions.
+% \end{itemize}
+
+% \paragraph{Key Concerns}
+% \begin{itemize}
+%     \item Safety (1), Holistic View (2), Efficiency (4), and Flexibility (5) are critical for performance optimizations that do not compromise data integrity or system stability.  \arq{Again, why is flexibility a concern here?}
+% \end{itemize}
+
+% \paragraph{Missing Key Concerns}
+% \begin{itemize}
+%     \item Direct Code Modification lacks in Safety (1) and Flexibility (5), with additional concerns in achieving a Holistic View (2) through isolated application logic modifications.
+% \end{itemize}
+
+% \subsubsection{FUSE BPF Example}
+
+% \paragraph{Original Methodologies}
+% \begin{itemize}
+%     \item Kernel eBPF or kernel modules with a userspace controller/daemon for filesystem operations, leveraging eBPF's kernel-level call interception and manipulation capabilities.
+% \end{itemize}
+
+% \paragraph{Key Concerns}
+% \begin{itemize}
+%     \item Safety (1), Holistic View (2), Efficiency (4), and Flexibility (5) ensure secure, comprehensive, and efficient filesystem operation extensions.
+% \end{itemize}
+
+% \paragraph{Missing Key Concerns}
+% \begin{itemize}
+%     \item Kernel eBPF may impact Efficiency (4) due to overhead from intercepting filesystem calls.
+% \end{itemize}
+
+% \subsubsection{DeepFlow}
+
+% \paragraph{Original Methodologies}
+% \begin{itemize}
+%     \item Primarily employs Kernel eBPF for real-time performance analysis and troubleshooting across the system.
+% \end{itemize}
+
+% \paragraph{Key Concerns}
+% \begin{itemize}
+%     \item All concerns—Safety (1), Holistic View (2), Dynamism (3), Efficiency (4), and Flexibility (5)—are essential for minimal overhead analysis.
+% \end{itemize}
+
+% \paragraph{Missing Key Concerns}
+% \begin{itemize}
+%     \item Kernel eBPF tends to lack in Efficiency (4) due to potential performance overhead from extensive data analysis.
+% \end{itemize}
+
+% \subsubsection{Syscount}
+
+% \paragraph{Original Methodologies}
+% \begin{itemize}
+%     \item Uses Kernel eBPF or kernel modules at the kernel level for system call tracing and counting.
+% \end{itemize}
+
+% \paragraph{Key Concerns}
+% \begin{itemize}
+%     \item Safety (1), Dynamism (3), Efficiency (4), and Flexibility (5) are prioritized for minimal impact on system performance.
+% \end{itemize}
+
+% \paragraph{Missing Key Concerns}
+% \begin{itemize}
+%     \item Similar to DeepFlow, Kernel eBPF may not fully meet the Efficiency (4) criterion.
+% \end{itemize}
+
+% \subsubsection{SSLsniff}
+
+% \paragraph{Original Methodologies}
+% \begin{itemize}
+%     \item Involves Kernel eBPF or a Userspace SDK for modifying application code to intercept SSL traffic.
+% \end{itemize}
+
+% \paragraph{Key Concerns}
+% \begin{itemize}
+%     \item Safety (1), Dynamism (3), Efficiency (4), and Flexibility (5) are crucial for non-disruptive traffic analysis.
+% \end{itemize}
+
+% \paragraph{Missing Key Concerns}
+% \begin{itemize}
+%     \item Kernel eBPF struggles with Efficiency (4), while a Userspace SDK may lack Dynamism (3) and Flexibility (5).
+% \end{itemize}
+
+% \subsubsection{Nginx Plugin}
+
+% \paragraph{Original Methodologies}
+% \begin{itemize}
+%     \item Implemented via Shared Libraries or Wasm/Lua modules for extending web server capabilities.
+% \end{itemize}
+
+% \paragraph{Key Concerns}
+% \begin{itemize}
+%     \item Safety (1), Dynamism (3), and Efficiency (4) are key for seamless functionality integration.
+% \end{itemize}
+
+% \paragraph{Missing Key Concerns}
+% \begin{itemize}
+%     \item Shared Libraries may not fully address Safety (1), and Wasm/Lua modules may impact Efficiency (4) due to execution in sandboxed environments.
+% \end{itemize}
+
+
+% Currently we have examples, apply the key terms and concept to the use cases
+
+% 1. redis example for batch IO: 
+%    - extensions that can change program behavior (5.1, 5.2) or for different configuration/control algorithm
+%    - typicaly in directly code modify or shared library/LD\_PRELOAD
+%    - only modify one process
+%    - require Key Concerns safe(1), efficiency(4)
+%    - directly code modify or shared library/LD\_PRELOAD lack safe(1) and Flexibility(5)
+% 2. redis example for Delayed-fsync: 
+%    - extensions that can change program behavior (5.1, 5.2) or for different configuration/control algorithm
+%    - typicaly in directly code modify, with kernle and userspace seperate part
+%    - require Key Concerns safe(1), holistic view(2), efficiency(4) 
+%    - directly code modify or shared library/LD\_PRELOAD lack safe(1)
+% 3. fuse bpf example
+%    - typically in kernel eBPF or kernel module with userspace daemon/controler
+%    - require Key Concerns safe(1), holistic view(2), efficiency(4)
+%    - kernel eBPF or kernel module lack efficiency(4)
+% 4. deepflow: 
+%    - efficient debugging or observability
+%    - typically in kernel eBPF
+%    - All 1-5 Key Concerns is required
+%    - kernel eBPF has 1,2,3,5, lack 4 efficient
+% 5. syscount
+%    - efficient debugging or observability
+%    - typically in kernel eBPF or kernel module, in kernel level
+%    - require Key Concerns safe(1), Dynamism(3), efficiency(4)
+%    - kernel eBPF has 1,2,3,5, lack 4 efficient
+% 6. sslsniff
+%    - efficient debugging or observability
+%    - typically in kernel eBPF or userspace SDK (modify the code and mannual instrucment)
+%    - require Key Concerns safe(1), Dynamism(3), efficiency(4)
+%    - kernel eBPF has 1,2,3,5, lack 4 efficient
+%    - userspace SDK lack 3 Dynamism and 4 Flexibility
+% 7. nginx plugin
+%    - typically in shared libraries or wasm/lua module
+%    - require Key Concerns safe(1), Dynamism(3), efficiency(4)
+%    - shared libraries lack safe(1) 
+%    - wasm/lua module lack efficiency(4)
+
+
+% Flexibility: generarous propose, redis example
+
+%Some Notes:
+
+% ## What are the core usecases that we want to claim
+
+% What we have now 
+
+% - extensions that can change program behavior (5.1, 5.2) or for different configuration/control algorithm, balance between A and B in specific cases
+% - efficient (and integrated) and isolated user probing, debugging or observability (5.4, 5.5)
+% - syscall interposition that only affects a single process (5.6)
+% - Untrust logic or logic requires dynamically loading at runtime (5.7), for api gateways, it's hard to stop the application and restart.. ~cite{}
+
+% There are 2 need when develop or deploy the modern application
+
+% - examples we want to claim: across the system
+% - observation: dynamically, need trust
+% - customization
+%   - examples:
+%     - security: dynamically
+%     - config, var: not dynamically, but need to be safe and across version?
+%     - test run
+%   - deploy example
+%     - who is the user
+%     - where to find it
+
+% We may need three key features or requirements:
+ 
+% - efficient
+% - dynamical
+% - safety and trust
+
+% further
+
+% - A modify code example / use cases, for performance and maintainance
+% - A more flexible one that require dynamically load
+
+% ## why we need extension
+
+% 1. General purpose you mentioned
+% 2. Auxiliary tasks, avoid crash main functions
+
+% There might be some others:
+
+% 3. Some extensions are from a not trusted source, e.g. web or extension markets(eBPF will also have some extension markets shortly, and can also be used as oci images for distribution. This is common in some network functions or tracing programs, and has production usecases)
+
+% 4. Some usecases needs dynamically load the extensions at runtime, so it cannot be modify the code and recompile. Eg. extensions for api gateways, redeploy may block the traffic, or for in memory database like redis. In the AOF persistence cases, it may take several minutes and a lot of cpu to restart the redis. And also, for the tracing or observability usecases(or continuous profiling), we want the probes to have zero performance overhead if we don't need it, but when we need trouble shooting, we can attach more probes to the current system without trying to restart and reproduce it. So it should be able to load and unload at runtime.
+
+% 5. Maintenance a separate version is costy. For tracing, observability, or debugging, it's hard to maintain only for temporary tracepoints. For different configurations or control algorithms, it's hard to maintain only for specific cases.
+
+% 6. Innovations.
+
+% ## Matrix for comparison: different approaches
+
+% Why not Modify the code directly?
+
+% - Trust:
+%   - The code is trust and developed by the developer team.
+% - Advantages:
+%   - Performance: no additional overhead
+%   - Easy to implement and use
+% - Disadvantages:
+%   - Needs to maintain a separate version, branch or patches for different use cases
+%     - for tracing, observability, or debugging, it's hard to maintain only for temporary tracepoints
+%     - for different configurations or control algorithms, it's hard to maintain only for specific cases
+%   - Not safe guaranteed, need to be careful about the code changes. And the code running must be trusted.
+%   - Typically need to recomplie and restart the application. May introduce downtime.
+% - Maintainance cost for different versions
+
+% LD_PRELOAD or Dynamic library:
+
+% - Trust:
+%   - The plugin should be trust
+% - Advantages:
+%   - Can dynamically load and unload at runtime, no need to restart the application
+%   - minimal performance overhead
+% - Disadvantages:
+%   - No safety or isolation guaranteed
+%   - Only able to modify the code in the same process.
+
+% Why not Wasm or other hardware based Isolation approach?
+
+% - Trust:
+%   - The plugin can be trust or not trust
+% - Wasm or other approach based on SFI like approach:
+%   - eBPF:  performance first, use verifier for security
+%   - Wasm: security first, use SFI or hardware isolation for security
+% - Advantages:
+%   - security first, easier to implement security features
+%   - Can run untrusted code, or code from third party, e.g., web or extension markets
+%   - Better language support or runtime support, e.g., Rust, C++, etc.
+% - Drawbacks
+%   - Wasi or eBPF Relies on underlying libraries for complex operations, e.g., Wasi-nn.
+%   - Wasi for Wasm require additional validation and runtime checks, leading to high performance costs.
+%   - Manual integration needed in wasm, making it less adaptable to API version changes. No dynamic attach to functions.
+%   - Haredware isolation needs to be supported by the hardware, and also has cost
+  
+% Why not kernel eBPF runtime?
+
+% - Trust:
+%   - The plugin needs to be trust because it's running in the kernel and has privileged access.
+%   - The verifier cannot guarantee the eBPF program's behavior is not harmful.
+% - Advantages:
+%   - Can run in the kernel, no need to modify the code in the user space.
+%   - Due to the kernel context, it has observability and control over the whole system.
+% - Disadvantages:
+%   - performance overhead: If we want to use kernel eBPF to extend or tracing userspace applications, it needs:
+%     - more context switches
+%     - more data copying between kernel and userspace.
+%   - requiring root access. Increases attack surface, posing risks like container escape.​ Inherent vulnerabilities in eBPF can lead to Kernel Exploits.
+%   - Verifier has limited the operation of eBPF. Because kernel context has privileged access, the verifier is more strict. Config eBPF runtime requires kernel change.
+
+% Why not other userspace eBPF runtime?
+
+% - Trust:
+%   - The plugin can be trust or not trust
+% - Already have userspace eBPF runtime in one process and verifier in one process
+%   - Ubpf: ELF parsing, simple hash map, arm64, x86 JIT.
+%   - Rbpf: Helper mechanism, x86 JIT, VM. GitHub.
+%   - Prevail verifier
+% - Advantages:
+%   - Similiar to bpftime, use verifier for security and better performance
+% - Drawbacks:
+%   - Cannot compatible with kernel eBPF library and toolchains
+%   - No attach support. No interprocess maps.
+%   - Only limited in the single context: kernel context/userspace context. No suitable for cross-process or cross-boundary.
+
+% Why not using ptrace or other tools like Frida / Dynamic IO / PIN ?
+
+% - Advantages:
+%   - Can modify the code in another process
+%   - Can attach to the process at runtime
+%   - Can be used for debugging or tracing
+% - Disadvantages:
+%   - eBPF can access deep data structs with pointers in the applications, without runtime checks
+%   - DBI tools are only in single context, no model for cross-process or cross-boundary.
+
+% 2.1. why you must have extensions, why important
+% 2.2. example: what is the reqirements, what't missing. Better be match with previous
+% 2.3. what't missing in extensions
+% 2.4. why bpftime
+
+% keep the same order

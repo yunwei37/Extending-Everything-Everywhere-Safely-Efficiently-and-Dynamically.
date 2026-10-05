@@ -1,0 +1,126 @@
+\section{Use Cases}\label{sec:use_cases}
+We show the usefulness of \sys extensions across \numcases use cases that explore design tradeoffs, improve security, monitor performance, and improve performance.
+
+\paragraph{DeepFlow}
+DeepFlow uses all four of \sys{}'s constraints: comprehensiveness, dynamism, safety, and efficiency (see \cref{sec:motivation:examples}).  DeepFlow was originally implemented using the eBPF ecosystem, but eBPF \texttt{uprobe}s can result in as much as 50\% decrease in throughput.  We ported DeepFlow to \sys, modifying 10 out of the ~5,000 lines of eBPF code, so that the tool could benefit from \sys's efficiency.
+
+\paragraph{Redis Durability Tuning}
+%\begin{figure}[t]
+%\centering
+%\begin{minted}{c++}
+%int writeback_fin_cnt; 
+%// shared between kernel and userspace
+
+%SEC("uprobe/fdatasync")
+%int BPF_UPROBE(start_fsync, int __fd) {
+%  if (writeback_fin_cnt == 0) {
+%    io_uring_wait_and_seen();
+%  } // else the fsync is completed 
+%    // so we don't need to wait for CQE
+%  successful_writeback_count = 0;
+%  io_uring_prep_fsync(__fd);
+%  io_uring_submit();
+%  bpf_override_return(0, 0);
+%  return 0;
+%}
+
+%SEC("kretprobe/file_write_and_wait_range")
+%int BPF_KPROBE(file_write_and_wait_range, 
+%              struct file *file, loff_t start,
+%              loff_t end) {
+%  ... // Check whether the fsync is 
+%      // submited by the redis and AOF
+%  __sync_fetch_and_add(&writeback_fin_cnt, 1);
+%  return 0;
+%}
+%\end{minted}
+%\vspace{-0.5cm}
+%\caption{Delayed fsync with fast notify \sys extension for Redis.} %\label{code:redis}
+%\vspace{-0.5cm}
+%\end{figure}
+
+We implement the extensions described in the Durability Tuning use-case, which uses all four of \sys{} design constraints (\cref{sec:motivation:examples}).  We implement the batching extension using one uprobe that intercepts calls to \texttt{write} and one uprobe that intercepts calls to \texttt{fdatasync}.  We implement the delayed-fsync extension using a \texttt{uprobe} to modify \texttt{fdatasync}.  We implement the fast notify optimization using a kernel extension to store to a shared variable when the kernel reaches the \texttt{kretprobe} for the \texttt{file\_write\_and\_wait\_range} function, which occurs in the kernel soon after \texttt{fsync} completes.  The userspace extension for \texttt{fdatasync} checks the shared variable before waiting on the \texttt{io\_uring} completion queue.   %\cref{code:redis} shows the source code for this use-case.  The Durability Tuning use-case requires all four of \sys{}'s constraints: comprehensiveness, dynamism, safety, and efficiency. \arq{Dropped for space}
+
+
+% Redis is a flexible and efficient durable key-value store.  Redis can be configured to provide persistence by using an Append-Only File (AOF). The system offers three durability configurations that tradeoff performance for crash-consistency: no AOF, which provides no durability; everysec, which ensures that writes are durable every second and is the default; and alwayson, which ensures that every write is immediately durable.  The durability gap between alwayson and everysec is quite large, with everysec suceptible to losing the data of tens of thousands of updates due to an untimely crash.  Unfortunately, the gap in performance is also large, with alwayson lowering throughput by a factor of 6 compared to everysec.  This case study uses \sys system extensions to explore alternative points in this durability-performance tradeoff. 
+
+%\yusheng{Make it clear: AOF is for Persistence. Redis is in memory, so the AOF Persistence is not enable by default. We are talking about the three options when we enable AOF Persistence. The first is no fsync, and the second is fsync every second, the third one is fsync always on. IF we enable AOF Persistence, the default config of AOF is everysec.}
+
+% We explore how to use system extensions to batch I/O operations (calls to \texttt{write} and \texttt{fsync}) in Redis by employing the \texttt{io\_uring} interface in linux.  By using a batch size of $b$ and configuring redis to use alwayson, a user can ensure that the system loses roughly $b/2$ updates to the key-value store in an untimely crash (roughly half of a batch will be calls to \texttt{fsync}).  Implementing the extension requires adding one uprobe to the redis server that intercept calls to \texttt{write} and one uprobe to libc that intercepts calls to \texttt{fdatasync}.  The extension is not possible with existing toolchains because existing uprobes are not able to modify a user execution in today's full system extensions.
+
+%\yusheng{An also the existing uprobes have no iouring helpers we extend} since existing extensions cannot modify a user extension, I don't think it seems critical to futher explain
+
+
+
+% This use-case builds on the redis durability exploration from the batched-I/O case.  Rather than exploring the performance-durability tradeoff, the extension described here investigates how much of a performance benefit we could obtain from a full-system extension that is highly-optimized to allow at most two updates to be lost due to an untimely crash---lowering the durability guarantee from alwayson by only a single write. 
+
+
+
+\paragraph{FUSE Caching}
+
+The Filesystem in Userspace (FUSE) framework offers reliability and security advantages compared to in-kernel alternatives.  However, FUSE imposes considerable runtime overhead because it requires numerous additional context switches for every I/O systemcall~\cite{Vangoor17}.  ExtFuse~\cite{Bijlani19} eliminates much of the overhead form using FUSE by enabling a FUSE filesystem to push its logic into the kernel.  However, ExtFuse is invasive: it requires a custom kernel module that is difficult to maintain. 
+
+This use-case presents a \sys extension that supports the same benefits of ExtFuse, without requiring kernel changes.  The extension accelerates FUSE by implementing two optimizations that extend the applications that use the FUSE file system.  First, it implements a metadata cache that accelerates repeated lookups to the same file system entries.  The cache uses user-mode \texttt{syscall tracepoints} on calls to \texttt{open}, \texttt{close}, \texttt{getdents}, and \texttt{stat} made by the process that accesses the FUSE system.  The extension maintains cache consistency by removing elements from the cache anytime any process reaches the \texttt{kretprobe} for \texttt{unlink}.  Second, the extension implements a blacklist to accelerate permission checking for functions that access filesystem entries (\eg \texttt{open}).  The use case uses \sys{} comprehensiveness so that it can extend both userspace and the kernel, safety to verify that its extensions do not crash the FUSE system, and efficiency so that its cache results in tangible speedup.
+
+%\yusheng{For the fuse, actually we did evaluate the security filter, it's the openat syscall bench. In fact, for the metadata cache, we tested it on find command on Linux. We find the two syscalls when we trace the find command line tool, and accelerate them with our cache. The openat syscall cannot be cached, it's filtered.}
+
+%\yusheng{Different from Ext-fuse in kernel, the userspace ext-fuse is not global and can be attached in need. it can be attached to the process really have a lot of metadata access workloads. The downside is: it will slow down the other syscalls for the process we use userspace cache(due to the limitation of our syscall tracepoint implementation), for example, read write syscalls in find command. But it will not slow down other process that has no userspace fuse cache.}  Interesting, but not critical at this point in the paper.
+
+%The second feature of the extension implements a UID- and PID-based access control mechanism that enables file-grained control over file accessibility by using \texttt{syscall tracepoint}s on systemcalls that open entries (\eg \texttt{open}). ~\arq{Concerns in slack.  The Caching case sems incomplete---opening the question of \emph{how} \sys actually decides to do something system-wide vs. per-process.  Since we're in FUSE, everthing shoudl be system-wide (probably?) But then how does \sys know when to run something in user-mode vs. kernel-mode? DO we actually evaluate this anywhere?  The evaluation does not say so.
+
+% https://github.com/eunomia-bpf/bpftime-evaluation/tree/main/fuse
+
+
+
+\paragraph{sslsniff}
+
+The integration of SSL/TLS encryption within microservice architectures presents challenges to conventional RPC distributed tracing, since encryption obscures traffic's content.  \texttt{sslsniff}, a tool developed using bcc~\cite{bcc}, intercepts all SSL/TLS data written within userspace; logging tool output to a file provides the necessary output for distributed tracing.  \texttt{sslsniff} uses \texttt{uprobe}s on SSL/TLS encryption and decryption functions in OpenSSL.  In the existing eBPF ecosystem, \texttt{sslsniff} imposes high overhead. We port \texttt{sslsniff} to \sys{} without changing any code.  The system requires comprehensiveness, to observe encrypted traffic across all processes in the system; dynamism, to enable on-demand tracing; safety, to ensure that tracing does not break the traced application; and efficiency, to ensure that applications maintain their service level objectives.
+
+
+\paragraph{sysount}
+
+Aggregating the system call activity of a specific process can aid with performance monitoring.  Syscount~\cite{syscount}, a tool from BCC, provides this capability by employing \texttt{syscall tracepoint}s.  eBPF executes \texttt{syscall} \texttt{tracepoint}s on all processes in the system, so Syscount users must manually filtering for a specific process in the eBPF program.  This adds overhead to \emph{every} process in the system, even those that the developer does not want to monitor.  We implemented a version of Syscount that employs per-process user-mode \texttt{syscall tracepoint}s in \sys.  In \sys, this configuration isolates the monitoring cost to only those processes that are monitored; unrelated processes execute at native speed.  Similar to other observability examples, the new version of Syscount uses \sys{}'s dynamism, safety and efficiency.
+
+%\yusheng{ Syscount bcc link: https://github.com/iovisor/bcc/blob/master/libbpf-tools/syscount.c}
+
+\begin{comment}
+\begin{figure}[t]
+\begin{minted}[mathescape, linenos]{c++}
+SEC("tracepoint/raw_syscalls/sys_enter")
+int sys_enter(struct pt_args *args) {
+  ... 
+  if (filter_cg && 
+!bpf_current_task_under_cgroup(&cgroup_map, 0))
+    return 0;
+  if (filter_pid && pid != filter_pid)
+    return 0;
+  ...
+}
+\end{minted}
+\vspace{-0.5cm}
+\caption{Code for filtering syscall count}\label{code:syscount}
+\vspace{-0.5cm}
+\end{figure}
+
+\arq{I don't think that this adds too much to the paper}
+\end{comment}
+
+
+
+\paragraph{Nginx Plugin}
+
+Nginx provides a plugin architecture that supports extending its core capabilities.  This use-case explores an Nginx plugin that implements a firewall that automatically returns a 404 response for URLs that are indicative of SQL injection and cross-site scripting attacks.  Nginx conventionally supports plugins developed using Lua or WebAssembly.  While such language runtimes offer security guarantees, they impose high overhead because the plugin must copy data to-and-from Nginx instead of operating over the same memory objects.  We use \sys to implement the Nginx security plugin using \sys's \texttt{userpace tracepoint} mechanism to instrument the existing Nginx plugin infrastructure.  We write the Nginx security plugin using eBPF.  This use case requires dynamism, to enable the security policies to change at runtime; safety, to ensure that the plugin does not break Nginx; and efficiency, since the extension executes on the data-path of Nginx's traffic.
+
+
+%\yusheng{For nginx, We can change the module to dynamically attached easily, but I think it would be better if we can have static instrumentations to process traffic. I think that's not off-topic to this paper's story. The isolation, and the full system plugin are still working for statically define plugins in this cases, And the userspace offload, verifier and memory protection is also needed. 
+
+%So the only thing we left behind is the control flow protection and dynamically attached, others remain the same. The non-intrusive is just part of contribution? For the processing data, it would be better if we can have a stable interface for the plugin, just like the ebpf in the kernel for the network subsystem? The kernel doesn't use kprobe to process traffic, I think we should not do that as well. It's like the equivalent of eBPF socket in kernel, but it works in userspace for L7 traffic. And also, a stable interface has better performance.}  
+
+
+%~\arq{we don't have space to convey all of the stuff that you wrote above} but, this seems fine to write this way.
+
+% 2. Performance Metrics: The collection of performance metrics, particularly focusing on how different URLs respond in terms of time and load, is crucial in pinpointing inefficiencies and enhancing server performance. For instance, tracking the frequency of accesses to specific URL prefixes offers insights invaluable for high-traffic websites. Such data enables targeted performance optimizations, potentially elevating the user experience substantially. A notable aspect of Nginx, being a multi-process web server, is its limitation in sharing data structures across different processes when using Lua and WebAssembly modules. This constraint necessitates an alternative approach for effective data aggregation and analysis. Here, \sys emerges as a solution with its capability to utilize shared memory for hash maps. This feature allows \sys plugins to aggregate and summarize metrics directly, without the need to transmit data elsewhere for processing. Furthermore, while kernel eBPF uprobes have the capability to hook into user-space functions and monitor traffic, they face significant challenges in analyzing Layer 7 (L7) traffic, such as HTTP. This limitation stems from the Turing-incomplete nature of the kernel eBPF verifier, which imposes restrictions on the extent of traffic analysis possible at this layer. Consequently, \sys's approach offers a more efficient and direct method for gathering and processing web server performance metrics.
+
+%\arq{Since we don't measure the performance of our performance metrics extension, I say we chop it}.
+
+% \yusheng{We have measured the performance of our performance metrics extension. I updated it on the results. Maybe we don't need to remove it?} \arq{what are these results? I don't understand. with monitoring \sys is all of a sudden way slower? } \yusheng{I have no too much idea... in the monitor, we use hash maps to store the results, maybe we encountered some locks...If that's confusing, maybe we can just remove it? I don't think we have enough time to optimized it.} \arq{Lets just cut it from the paper.}
